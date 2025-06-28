@@ -1,12 +1,14 @@
 import os
 import pandas as pd
+import numpy as np
 from pathlib import Path
+from sklearn.linear_model import LinearRegression
 
 class DataCleaner:
     def __init__(self, airport_file, economy_file, capacity_input_folder, connection_input_folder, mix_input_folder, final_output_file,
-                 capacity_output_folder="./Capacity_Processed_0608", 
-                 connection_output_folder="./Connection_Processed_0608", 
-                 mix_output_folder="./Mix_Processed_0608",
+                 capacity_output_folder="./Capacity_Processed_0614",
+                 connection_output_folder="./Connection_Processed_0614",
+                 mix_output_folder="./Mix_Processed_0614",
                  start_year=2011):
         self.airport_file = airport_file
         self.economy_file = economy_file
@@ -453,7 +455,7 @@ class DataCleaner:
         else:
             return pd.DataFrame()
 
-    def __interpolate_city_data(self,city_data):
+    def __interpolate_city_data_bug(self,city_data):
         """定义一个函数，用于对每个城市的每年数据进行插值"""
         # 确保所有经济指标列为数值型，使用 pd.to_numeric 转换，并处理错误
         city_data['GDP（亿元）'] = pd.to_numeric(city_data['GDP（亿元）'], errors='coerce')
@@ -511,6 +513,116 @@ class DataCleaner:
         
         # 将插值数据转换为DataFrame并返回
         return pd.DataFrame(interpolated_data)
+
+    def __interpolate_city_data(self, city_data):
+        """对每个城市的每年数据进行插值和预测，处理中间年份缺失问题"""
+        # 确保所有经济指标列为数值型
+        indicators = ['GDP（亿元）', '人口（万人）', '第三产业占比（%）', 
+                    '人均可支配收入（元）', '社会消费品零售总额(万元)', 
+                    '三大产业就业人员总和(万人)', '民用航空客运量(万人)']
+        
+        for indicator in indicators:
+            city_data[indicator] = pd.to_numeric(city_data[indicator], errors='coerce')
+        
+        # ==== 新增：处理中间年份缺失问题 ====
+        # 获取年份范围
+        years = sorted(city_data['年份'].unique())
+        min_year = min(years)
+        max_year = max(years)
+        
+        # 创建完整年份范围的数据框架
+        all_years = pd.DataFrame({
+            '年份': range(min_year, max_year + 1),
+            '三字码': city_data['三字码'].iloc[0]  # 保持城市代码一致
+        })
+        
+        # 合并原始数据，填充缺失年份
+        city_data = pd.merge(all_years, city_data, how='left', on=['年份', '三字码'])
+        
+        # 处理缺失值和0值
+        for indicator in indicators:
+            # 将0值视为缺失
+            city_data.loc[city_data[indicator] == 0, indicator] = np.nan
+            
+            # 使用线性插值填充中间年份
+            city_data[indicator] = city_data[indicator].interpolate(method='linear')
+            
+            # 如果两端有缺失，用最近值填充
+            city_data[indicator] = city_data[indicator].fillna(method='ffill').fillna(method='bfill')
+
+            if city_data[indicator].isna().any():
+                city_data[indicator] = city_data[indicator].fillna(0)
+        # ==== 修复完成 ====
+        
+        # 创建一个空的列表来存储插值结果
+        interpolated_data = []
+        
+        # 重新获取年份范围（已包含完整年份）
+        years = sorted(city_data['年份'].unique())
+        min_year = min(years)
+        max_year = max(years)
+        
+        # 预测下一年数据（用于月度插值）
+        next_year_data = {}
+        for indicator in indicators:
+            # 使用所有年份数据训练模型
+            X = city_data['年份'].values.reshape(-1, 1)
+            y = city_data[indicator].values
+
+            # 如果y包含NaN，使用简单平均值替代
+            if np.isnan(y).any():
+                mean_val = np.nanmean(y)
+                y = np.where(np.isnan(y), mean_val, y)
+
+                # 如果所有值都是NaN，使用0
+                if np.isnan(mean_val):
+                    y = np.zeros_like(y)
+            
+            model = LinearRegression()
+            model.fit(X, y)
+            next_year_value = model.predict([[max_year + 1]])[0]
+            next_year_data[indicator] = next_year_value
+        
+        # 对每个年份进行月度插值
+        for year in years:
+            current_data = city_data[city_data['年份'] == year].iloc[0]
+            
+            # 确定下一年数据
+            if year < max_year:
+                next_data = city_data[city_data['年份'] == year + 1].iloc[0]
+            else:
+                # 使用预测的下一年数据
+                next_data = {'年份': year + 1, '三字码': current_data['三字码']}
+                for indicator in indicators:
+                    next_data[indicator] = next_year_data[indicator]
+            
+            # 按月插值
+            for month in range(1, 13):
+                row = {'YearMonth': f'{year}-{month:02d}', 'City': current_data['三字码']}
+                
+                for indicator in indicators:
+                    # 线性插值公式
+                    ratio = (month - 1) / 12.0
+                    current_val = current_data[indicator]
+                    next_val = next_data[indicator]
+                    interpolated_val = current_val + ratio * (next_val - current_val)
+                    
+                    row[indicator] = interpolated_val
+                
+                interpolated_data.append(row)
+        
+        # 转换为DataFrame并重命名列
+        result = pd.DataFrame(interpolated_data)
+        col_mapping = {
+            'GDP（亿元）': 'GDP',
+            '人口（万人）': 'Population',
+            '第三产业占比（%）': 'Third_Industry',
+            '人均可支配收入（元）': 'Revenue',
+            '社会消费品零售总额(万元)': 'Retail',
+            '三大产业就业人员总和(万人)': 'Labor',
+            '民用航空客运量(万人)': 'Air_Traffic'
+        }
+        return result.rename(columns=col_mapping)
 
     def process_economy(self):
         ecodata = pd.read_csv(self.economy_file)
@@ -572,7 +684,7 @@ if __name__ == "__main__":
     capacity_input_folder = './OAG_Capacity/OAG_Capacity_Report(1996-2024.6.30)/capacity1997-2024'
     connection_input_folder = './OAG_Traffic/OAG_Traffic_Report(2010-2024)/traffic2011-2024/con2011-2024'
     mix_input_folder = './OAG_Traffic/OAG_Traffic_Report(2010-2024)/traffic2011-2024/mix2011-2024'
-    final_output_file = './final_data_0608.csv'
+    final_output_file = './final_data_0623.csv'
     processor = DataCleaner(airport_file=airport_file, 
                             economy_file=economy_file, 
                             capacity_input_folder=capacity_input_folder, 

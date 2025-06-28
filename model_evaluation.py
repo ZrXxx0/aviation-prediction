@@ -39,13 +39,16 @@ class ModelEvaluator:
         }
         return self
 
-    def report(self, name="Test"):
+    def report(self, name="Test", return_str=False):
         """生成评估报告"""
-        print(f"\n{name} Metrics:")
-        for k, v in self.metrics.items():
-            if k in ['MAPE', 'sMAPE']:
-                print(f"{k}: {v:.2%}")
-            elif k == 'R²':
-                print(f"{k}: {v:.4f}")
-            else:
-                print(f"{k}: {v:.2f}")
+        if return_str:
+            return f"{name} Metrics:\n" + "\n".join([f"{k}: {v:.2f}" for k, v in self.metrics.items()])
+        else:
+            print(f"\n{name} Metrics:")
+            for k, v in self.metrics.items():
+                if k in ['MAPE', 'sMAPE']:
+                    print(f"{k}: {v:.2%}")
+                elif k == 'R²':
+                    print(f"{k}: {v:.4f}")
+                else:
+                    print(f"{k}: {v:.2f}")

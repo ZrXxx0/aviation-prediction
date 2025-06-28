@@ -15,7 +15,7 @@ from FeatureEngineer import DataPreprocessor, FeatureBuilder, AirlineRouteModel
 # 航线选择
 origin='PEK'
 destination='SZX'
-domestic = pd.read_csv('./final_data_0614.csv', low_memory=False)
+domestic = pd.read_csv('./final_data_0622.csv', low_memory=False)
 
 # 测试集大小
 test_size=12  # 最后12个月/4季度/1年为测试集
@@ -37,7 +37,8 @@ future_periods = 36  # 默认36个月/12季度/4年 以月为单位
 # 创建处理实例
 preprocessor = DataPreprocessor(
     fill_method='interp', 
-    normalize=False
+    normalize=False,
+    non_economic_tail_window=6,  # 非经济指标的滑动窗口大小
 )
 
 # 初始化粒度控制器
@@ -72,27 +73,27 @@ X_train, y_train, X_test, y_test, data_with_features = route_processor.prepare_d
     test_size=test_size
 )
 
-# save_dir = f'./result/{TIME_GRANULARITY}'
-# os.makedirs(save_dir, exist_ok=True)
-# X_train.to_csv(f'{save_dir}/{origin}_{destination}_X_train.csv', index=False)
-# X_test.to_csv(f'{save_dir}/{origin}_{destination}_X_test.csv', index=False)
-# pd.DataFrame(y_train).to_csv(f'{save_dir}/{origin}_{destination}_y_train.csv', index=False)
-# pd.DataFrame(y_test).to_csv(f'{save_dir}/{origin}_{destination}_y_test.csv', index=False)
-# data_with_features.to_csv(f'{save_dir}/{origin}_{destination}_data_with_features.csv', index=False)
+save_dir = f'./result/{TIME_GRANULARITY}'
+os.makedirs(save_dir, exist_ok=True)
+X_train.to_csv(f'{save_dir}/{origin}_{destination}_X_train.csv', index=False)
+X_test.to_csv(f'{save_dir}/{origin}_{destination}_X_test.csv', index=False)
+pd.DataFrame(y_train).to_csv(f'{save_dir}/{origin}_{destination}_y_train.csv', index=False)
+pd.DataFrame(y_test).to_csv(f'{save_dir}/{origin}_{destination}_y_test.csv', index=False)
+data_with_features.to_csv(f'{save_dir}/{origin}_{destination}_data_with_features.csv', index=False)
 # print(X_train.shape)
 
 """
 模型选择如下
 """
 # 模型加载 monthly
-# model = lgb.LGBMRegressor(
-#     n_estimators=100,
-#     max_depth=7,
-#     min_child_samples=10,         # 更小的叶子节点允许更多分裂
-#     min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-#     learning_rate=0.1,
-#     random_state=42
-# )
+model = lgb.LGBMRegressor(
+    n_estimators=100,
+    max_depth=7,
+    min_child_samples=10,         # 更小的叶子节点允许更多分裂
+    min_split_gain=0.0,           # 放宽分裂的最小增益门槛
+    learning_rate=0.1,
+    random_state=42
+)
 # quarterly
 model = lgb.LGBMRegressor(
     n_estimators=100,
@@ -103,14 +104,14 @@ model = lgb.LGBMRegressor(
     random_state=42
 )
 # yearly
-model = lgb.LGBMRegressor(
-    n_estimators=100,
-    max_depth=3,
-    min_child_samples=1,         # 更小的叶子节点允许更多分裂
-    min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-    learning_rate=0.1,
-    random_state=42
-)
+# model = lgb.LGBMRegressor(
+#     n_estimators=100,
+#     max_depth=3,
+#     min_child_samples=1,         # 更小的叶子节点允许更多分裂
+#     min_split_gain=0.0,           # 放宽分裂的最小增益门槛
+#     learning_rate=0.1,
+#     random_state=42
+# )
 # 模型加载 monthly
 # model = xgb.XGBRegressor(
 #     n_estimators=100,
@@ -134,18 +135,20 @@ model.fit(X_train, y_train)
 
 ##################################    模型评估   ##################################
 # 特征重要性
-# importances = model.feature_importances_
-# lgb.plot_importance(model, max_num_features=20)
-# # xgb.plot_importance(model, max_num_features=20)
-# plt.show()
+importances = model.feature_importances_
+lgb.plot_importance(model, max_num_features=20)
+# xgb.plot_importance(model, max_num_features=20)
+plt.show()
 
 # 评估模型
 train_preds = model.predict(X_train)
-test_preds = model.predict(X_test)
 train_evaluator = ModelEvaluator(y_train, train_preds).calculate_metrics()
-test_evaluator = ModelEvaluator(y_test, test_preds).calculate_metrics()
 train_evaluator.report("Train")
-test_evaluator.report("Test")
+test_preds = None
+if TIME_GRANULARITY != 'yearly':
+    test_preds = model.predict(X_test)
+    test_evaluator = ModelEvaluator(y_test, test_preds).calculate_metrics()
+    test_evaluator.report("Test")
 
 
 
@@ -194,7 +197,7 @@ for i in range(future_periods):
     future_preds.append({'YearMonth': next_date, 'Predicted': next_pred})
     last_complete_date = next_date
 
-# latest_data.to_csv(f'./result/{origin}_{destination}_latest_data1.csv', index=False)
+latest_data.to_csv(f'{save_dir}/{origin}_{destination}_latest_data.csv', index=False)
 
 # 创建结果DataFrame
 train_df = pd.DataFrame({
@@ -215,7 +218,10 @@ future_df = pd.DataFrame(future_preds)
 future_df['Actual'] = np.nan
 future_df['Set'] = 'Future'
 
-result_df = pd.concat([train_df, test_df, future_df])
+if test_df.empty:  # 如果没有测试集数据，只保留训练集和未来预测
+    result_df = pd.concat([train_df, future_df])
+else:  # 如果有测试集数据，保留训练集、测试集和未来预测
+    result_df = pd.concat([train_df, test_df, future_df])
 # result_df.to_csv(f'{save_dir}/{origin}_{destination}_预测结果.csv', 
 #                 index=False, 
 #                 encoding='utf_8_sig',  # 支持中文路径
@@ -235,11 +241,12 @@ plt.plot(result_df[train_mask]['YearMonth'],
             label='Train Pred', linestyle='--', color='blue')
 
 # 测试集预测
-test_mask = result_df['Set'] == 'Test'
-# print(result_df[test_mask])
-plt.plot(result_df[test_mask]['YearMonth'], 
-            result_df[test_mask]['Predicted'], 
-            label='Test Pred', linestyle='--', color='red', marker='o', markersize=3, )
+if not test_df.empty:  # 如果有测试集数据
+    test_mask = result_df['Set'] == 'Test'
+    # print(result_df[test_mask])
+    plt.plot(result_df[test_mask]['YearMonth'], 
+                result_df[test_mask]['Predicted'], 
+                label='Test Pred', linestyle='--', color='red', marker='o', markersize=3, )
 
 # 未来预测
 future_mask = result_df['Set'] == 'Future'
