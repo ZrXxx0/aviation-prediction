@@ -36,19 +36,37 @@ for idx, row in unique_routes.iterrows():
         if total_cells == 0:
             valid_count = 0
             ratio = 0.0
+            min_ym = "N/A"
+            max_ym = "N/A"
         else:
             # 计算有效数据数量
             valid_mask = route_data.map(is_valid)
             valid_count = valid_mask.sum().sum()
             ratio = valid_count / total_cells
+            
+            # 提取时间范围（如果存在YearMonth列）
+            if 'YearMonth' in route_data.columns:
+                # 过滤掉无效的年月值
+                valid_ym = route_data['YearMonth'].dropna()
+                if not valid_ym.empty:
+                    min_ym = valid_ym.min()
+                    max_ym = valid_ym.max()
+                else:
+                    min_ym = "N/A"
+                    max_ym = "N/A"
+            else:
+                min_ym = "N/A"
+                max_ym = "N/A"
         
-        # 添加结果
+        # 添加结果（包含时间范围）
         results.append({
             'Origin': origin,
             'Destination': destination,
             'Total_Cells': total_cells,
             'Valid_Cells': valid_count,
-            'Valid_Ratio': ratio
+            'Valid_Ratio': ratio,
+            'Min_YearMonth': min_ym,
+            'Max_YearMonth': max_ym
         })
         
     except Exception as e:
@@ -58,7 +76,9 @@ for idx, row in unique_routes.iterrows():
             'Destination': destination,
             'Total_Cells': 0,
             'Valid_Cells': 0,
-            'Valid_Ratio': 0.0
+            'Valid_Ratio': 0.0,
+            'Min_YearMonth': "N/A",
+            'Max_YearMonth': "N/A"
         })
 
 # 创建结果DataFrame并排序

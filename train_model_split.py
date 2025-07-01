@@ -9,6 +9,11 @@ from time_granularity import TimeGranularityController
 from TS_model import ARIMAModel, ProphetModel
 from model_evaluation import ModelEvaluator
 from FeatureEngineer import DataPreprocessor, FeatureBuilder, AirlineRouteModel
+from create_model import get_model
+
+import warnings
+warnings.filterwarnings("ignore")
+
 
 
 ##################################    控制数据   ##################################
@@ -23,6 +28,8 @@ test_size=12  # 最后12个月/4季度/1年为测试集
 
 # 训练时间粒度
 TIME_GRANULARITY = 'monthly'  # 'monthly', 'quarterly', 'yearly'
+# 选择模型类型 (lgb 或 xgb)
+MODEL_TYPE = 'lgb'  # 'lgb' 或 'xgb'
 
 # 是否增加时间序列预测特征
 add_ts_forecast=True  # True or False
@@ -74,60 +81,19 @@ X_train, y_train, X_test, y_test, data_with_features = route_processor.prepare_d
 )
 
 save_dir = f'./result/{TIME_GRANULARITY}'
-os.makedirs(save_dir, exist_ok=True)
-X_train.to_csv(f'{save_dir}/{origin}_{destination}_X_train.csv', index=False)
-X_test.to_csv(f'{save_dir}/{origin}_{destination}_X_test.csv', index=False)
-pd.DataFrame(y_train).to_csv(f'{save_dir}/{origin}_{destination}_y_train.csv', index=False)
-pd.DataFrame(y_test).to_csv(f'{save_dir}/{origin}_{destination}_y_test.csv', index=False)
-data_with_features.to_csv(f'{save_dir}/{origin}_{destination}_data_with_features.csv', index=False)
+# os.makedirs(save_dir, exist_ok=True)
+# X_train.to_csv(f'{save_dir}/{origin}_{destination}_X_train.csv', index=False)
+# X_test.to_csv(f'{save_dir}/{origin}_{destination}_X_test.csv', index=False)
+# pd.DataFrame(y_train).to_csv(f'{save_dir}/{origin}_{destination}_y_train.csv', index=False)
+# pd.DataFrame(y_test).to_csv(f'{save_dir}/{origin}_{destination}_y_test.csv', index=False)
+# data_with_features.to_csv(f'{save_dir}/{origin}_{destination}_data_with_features.csv', index=False)
 # print(X_train.shape)
 
 """
 模型选择如下
 """
-# 模型加载 monthly
-model = lgb.LGBMRegressor(
-    n_estimators=100,
-    max_depth=7,
-    min_child_samples=10,         # 更小的叶子节点允许更多分裂
-    min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-    learning_rate=0.1,
-    random_state=42
-)
-# quarterly
-# model = lgb.LGBMRegressor(
-#     n_estimators=100,
-#     max_depth=2,
-#     min_child_samples=2,         # 更小的叶子节点允许更多分裂
-#     min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-#     learning_rate=0.1,
-#     random_state=42
-# )
-# yearly
-# model = lgb.LGBMRegressor(
-#     n_estimators=100,
-#     max_depth=3,
-#     min_child_samples=1,         # 更小的叶子节点允许更多分裂
-#     min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-#     learning_rate=0.1,
-#     random_state=42
-# )
-# 模型加载 monthly
-# model = xgb.XGBRegressor(
-#     n_estimators=100,
-#     max_depth=3,
-#     learning_rate=0.1,
-#     reg_lambda=1,  
-#     random_state=42
-# )
-# yearly quarterly
-# model = xgb.XGBRegressor(
-#     n_estimators=100,
-#     max_depth=2,
-#     learning_rate=0.1,
-#     reg_lambda=1,  
-#     random_state=42
-# )
+# 选择模型
+model = get_model(TIME_GRANULARITY, MODEL_TYPE)
 # 训练模型
 model.fit(X_train, y_train)
 
@@ -136,8 +102,10 @@ model.fit(X_train, y_train)
 ##################################    模型评估   ##################################
 # 特征重要性
 importances = model.feature_importances_
-lgb.plot_importance(model, max_num_features=20)
-# xgb.plot_importance(model, max_num_features=20)
+if MODEL_TYPE == 'lgb':
+    lgb.plot_importance(model, max_num_features=20)
+else:
+    xgb.plot_importance(model, max_num_features=20)
 plt.show()
 
 # 评估模型
@@ -161,22 +129,14 @@ target_col = route_processor.target_col
 
 # 未来预测
 # 使用全部可用数据（训练集+测试集）重新训练模型
-X_full, y_full, X_test_none, y_test_none, data_with_features_full = route_processor.prepare_data(
+X_full, y_full, _, _, data_with_features_full = route_processor.prepare_data(
     origin=origin,
     destination=destination,
     test_size=0
 )
-model = lgb.LGBMRegressor(
-    n_estimators=100,
-    max_depth=7,
-    min_child_samples=10,         # 更小的叶子节点允许更多分裂
-    min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-    learning_rate=0.1,
-    random_state=42
-)
-model.fit(X_full, y_full)
-
-
+# 使用相同的配置创建新模型
+model_full = get_model(TIME_GRANULARITY, MODEL_TYPE)
+model_full.fit(X_full, y_full)
 
 if TIME_GRANULARITY == 'quarterly':
     future_periods = future_periods//3  # 预测12个季度
@@ -209,7 +169,7 @@ for i in range(future_periods):
     latest_data = route_processor.preprocessor.fit_transform(latest_data)
     latest_data = route_processor.feature_builder.fit_transform(latest_data)
     latest_input = latest_data.iloc[[-1]][feature_cols]
-    next_pred = model.predict(latest_input)[0]
+    next_pred = model_full.predict(latest_input)[0]
     latest_data.loc[latest_data.index[-1], 'Route_Total_Seats'] = next_pred
     future_preds.append({'YearMonth': next_date, 'Predicted': next_pred})
     last_complete_date = next_date

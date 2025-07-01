@@ -9,6 +9,8 @@ from time_granularity import TimeGranularityController
 from TS_model import ARIMAModel, ProphetModel
 from model_evaluation import ModelEvaluator
 from FeatureEngineer import DataPreprocessor, FeatureBuilder, AirlineRouteModel
+from create_model import get_model
+
 
 
 ##################################    控制数据   ##################################
@@ -23,6 +25,8 @@ test_size=12  # 最后12个月/4季度/1年为测试集
 
 # 训练时间粒度
 TIME_GRANULARITY = 'quarterly'  # 'monthly', 'quarterly', 'yearly'
+# 选择模型类型 (lgb 或 xgb)
+MODEL_TYPE = 'lgb'  # 'lgb' 或 'xgb'
 
 # 是否增加时间序列预测特征
 add_ts_forecast=True  # True or False
@@ -85,49 +89,8 @@ data_with_features.to_csv(f'{save_dir}/{origin}_{destination}_data_with_features
 """
 模型选择如下
 """
-# 模型加载 monthly
-model = lgb.LGBMRegressor(
-    n_estimators=100,
-    max_depth=7,
-    min_child_samples=10,         # 更小的叶子节点允许更多分裂
-    min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-    learning_rate=0.1,
-    random_state=42
-)
-# quarterly
-model = lgb.LGBMRegressor(
-    n_estimators=100,
-    max_depth=2,
-    min_child_samples=2,         # 更小的叶子节点允许更多分裂
-    min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-    learning_rate=0.1,
-    random_state=42
-)
-# yearly
-# model = lgb.LGBMRegressor(
-#     n_estimators=100,
-#     max_depth=3,
-#     min_child_samples=1,         # 更小的叶子节点允许更多分裂
-#     min_split_gain=0.0,           # 放宽分裂的最小增益门槛
-#     learning_rate=0.1,
-#     random_state=42
-# )
-# 模型加载 monthly
-# model = xgb.XGBRegressor(
-#     n_estimators=100,
-#     max_depth=3,
-#     learning_rate=0.1,
-#     reg_lambda=1,  
-#     random_state=42
-# )
-# yearly quarterly
-# model = xgb.XGBRegressor(
-#     n_estimators=100,
-#     max_depth=2,
-#     learning_rate=0.1,
-#     reg_lambda=1,  
-#     random_state=42
-# )
+# 选择模型
+model = get_model(TIME_GRANULARITY, MODEL_TYPE)
 # 训练模型
 model.fit(X_train, y_train)
 
@@ -136,8 +99,10 @@ model.fit(X_train, y_train)
 ##################################    模型评估   ##################################
 # 特征重要性
 importances = model.feature_importances_
-lgb.plot_importance(model, max_num_features=20)
-# xgb.plot_importance(model, max_num_features=20)
+if MODEL_TYPE == 'lgb':
+    lgb.plot_importance(model, max_num_features=20)
+else:
+    xgb.plot_importance(model, max_num_features=20)
 plt.show()
 
 # 评估模型

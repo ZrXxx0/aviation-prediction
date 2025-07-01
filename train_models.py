@@ -10,12 +10,23 @@ from time_granularity import TimeGranularityController
 from TS_model import ARIMAModel
 from model_evaluation import ModelEvaluator
 from FeatureEngineer import DataPreprocessor, FeatureBuilder, AirlineRouteModel
+from create_model import get_model
+from filter_large_samples import filter_routes
 
+import warnings
+warnings.filterwarnings("ignore")
 
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体
 plt.rcParams['axes.unicode_minus'] = False
 
+
+
 ##################################    全局配置   ##################################
+# 数据加载地址
+ROUTE_DATA_REPORT_PATH = './route_data_report.csv'
+DOMESTIC_DATA_PATH = './final_data_0622.csv'
+# 输出目录
+BASE_SAVE_DIR = './results'
 # 全局参数配置
 CONFIG = {
     "test_size": 12,  # 测试集大小
@@ -23,65 +34,10 @@ CONFIG = {
     "add_ts_forecast": True,  # 是否添加时间序列特征
     "future_periods": 36,  # 预测时长
     "max_workers": 4,  # 并行处理的最大进程数
-    "model_type": "lightgbm",  # 可选: lightgbm, xgboost
+    "model_type": "lgb",  # 'lgb' 或 'xgb'
     "plot_results": True,  # 是否生成结果图表
     "save_data": True,  # 是否保存中间数据
     "min_valid_ratio": 0.8  # 最小有效比例阈值
-}
-
-# 模型参数配置 (根据时间粒度调整)
-MODEL_PARAMS = {
-    "monthly": {
-        "lightgbm": {
-            "n_estimators": 100,
-            "max_depth": 7,
-            "min_child_samples": 10,
-            "min_split_gain": 0.0,
-            "learning_rate": 0.1,
-            "random_state": 42
-        },
-        "xgboost": {
-            "n_estimators": 100,
-            "max_depth": 3,
-            "learning_rate": 0.1,
-            "reg_lambda": 1,
-            "random_state": 42
-        }
-    },
-    "quarterly": {
-        "lightgbm": {
-            "n_estimators": 100,
-            "max_depth": 2,
-            "min_child_samples": 2,
-            "min_split_gain": 0.0,
-            "learning_rate": 0.1,
-            "random_state": 42
-        },
-        "xgboost": {
-            "n_estimators": 100,
-            "max_depth": 2,
-            "learning_rate": 0.1,
-            "reg_lambda": 1,
-            "random_state": 42
-        }
-    },
-    "yearly": {
-        "lightgbm": {
-            "n_estimators": 100,
-            "max_depth": 3,
-            "min_child_samples": 1,
-            "min_split_gain": 0.0,
-            "learning_rate": 0.1,
-            "random_state": 42
-        },
-        "xgboost": {
-            "n_estimators": 100,
-            "max_depth": 2,
-            "learning_rate": 0.1,
-            "reg_lambda": 1,
-            "random_state": 42
-        }
-    }
 }
 
 ##################################    核心函数   ##################################
@@ -156,13 +112,7 @@ def process_single_route(route, domestic, config):
             data_with_features.to_csv(os.path.join(route_dir, "data_with_features.csv"), index=False)
         
         # 初始化模型
-        model_params = MODEL_PARAMS[config["time_granularity"]][config["model_type"]]
-        
-        if config["model_type"] == "lightgbm":
-            model = lgb.LGBMRegressor(**model_params)
-        else:
-            model = xgb.XGBRegressor(**model_params)
-        
+        model = get_model(config["time_granularity"], config["model_type"])
         # 训练模型
         model.fit(X_train, y_train)
         
@@ -185,7 +135,7 @@ def process_single_route(route, domestic, config):
                 f.write(test_evaluator.report("Test", return_str=True))
         
         # 特征重要性
-        if config["model_type"] == "lightgbm":
+        if config["model_type"] == "lgb":
             lgb.plot_importance(model, max_num_features=20)
         else:
             xgb.plot_importance(model, max_num_features=20)
@@ -326,11 +276,14 @@ def process_all_routes(domestic, config):
     """
     # 从文件加载航线列表
     print("加载航线列表...")
-    route_report = pd.read_csv('./route_data_report.csv')
+    if not os.path.exists(ROUTE_DATA_REPORT_PATH):
+        print("! 航线报告文件不存在")
+        return
+    route_report = pd.read_csv(ROUTE_DATA_REPORT_PATH)
     
     # 过滤有效比例大于阈值的航线
     min_ratio = config["min_valid_ratio"]
-    valid_routes = route_report[route_report['Valid_Ratio'] > min_ratio]
+    valid_routes = filter_routes(min_ratio,ROUTE_DATA_REPORT_PATH)
     
     # 创建航线元组列表
     routes_list = list(valid_routes[['Origin', 'Destination']].itertuples(index=False, name=None))
@@ -343,7 +296,7 @@ def process_all_routes(domestic, config):
     
     # 创建基础保存目录
     base_dir = os.path.join(
-        "./results", 
+        BASE_SAVE_DIR, 
         f"{config['time_granularity']}_{config['model_type']}"
     )
     config["base_save_dir"] = base_dir
@@ -382,7 +335,7 @@ def process_all_routes(domestic, config):
 if __name__ == "__main__":
     # 加载数据
     print("加载数据集...")
-    domestic = pd.read_csv('./final_data_0622.csv', low_memory=False)
+    domestic = pd.read_csv(DOMESTIC_DATA_PATH, low_memory=False)
     
     # 执行批量处理
     process_all_routes(domestic, CONFIG)
